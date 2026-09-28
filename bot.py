@@ -117,8 +117,10 @@ def caption(date, times):
 
 
 def render(date, times, out):
-    subprocess.run([sys.executable, os.path.join(HERE, "make_video.py"), "--date", date.isoformat(),
-                    "--slots", *times, "-o", out], check=True, capture_output=True)
+    r = subprocess.run([sys.executable, os.path.join(HERE, "make_video.py"), "--date", date.isoformat(),
+                        "--slots", *times, "-o", out], capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError("не получилось собрать ролик: " + (r.stderr.strip().splitlines() or ["?"])[-1])
 
 
 def send_preview(chat, date, times):
