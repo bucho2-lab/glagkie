@@ -3,6 +3,8 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+permissions:
+  contents: write
 concurrency:
   group: slot-bot
   cancel-in-progress: false
@@ -12,6 +14,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -22,3 +26,4 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
           CHANNEL: ${{ vars.CHANNEL || '@gladkie_linii_msk' }}
+          GIT_PUSH: "1"

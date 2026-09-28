@@ -10,11 +10,15 @@
   python3 bot.py              один проход по новым сообщениям
   python3 bot.py --loop       работать постоянно (для своего сервера)
   python3 bot.py --loop 1500  слушать 25 минут (так запускает GitHub Actions)
+  python3 bot.py --ask-templates  попросить новые картинки (по воскресеньям)
+
+Картинки, которые Иван присылает боту, сохраняются в assets/templates/<воскресенье недели>/
+и идут фоном в ролики.
 
 Состояние не хранится: Telegram сам помнит, какие сообщения уже обработаны (offset),
 а кнопка «Опубликовать» копирует в канал уже присланное превью.
 """
-import datetime as dt, os, re, subprocess, sys, tempfile, time
+import datetime as dt, os, re, subprocess, sys, tempfile, time, glob
 from zoneinfo import ZoneInfo
 import requests
 
@@ -38,7 +42,7 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
 HELP = ("Пришлите дату и время свободных окон, например:\n"
         "30.09 11:00, 13:30 или 14:00, 18:00\n"
         "завтра 12:00 15:00\n"
-        "Можно несколько строк, по ролику на каждую дату. "
+        "Можно несколько строк, по ролику на каждую дату. Картинки для фона присылайте фото. "
         "Я пришлю превью, а в канал оно уйдёт только после кнопки «Опубликовать».")
 
 
@@ -135,6 +139,55 @@ def send_preview(chat, date, times):
     api("editMessageReplyMarkup", chat_id=chat, message_id=msg["message_id"], reply_markup=kb)
 
 
+TEMPLATES = os.path.join(HERE, "assets", "templates")
+ASK_TEXT = ("Воскресенье: пришлите, пожалуйста, новые картинки для роликов на эту неделю. "
+            "Просто отправьте их сюда фото (лучше вертикальные, без надписей). "
+            "Если не пришлёте, останутся картинки прошлой недели.")
+
+
+def week_folder(today):
+    """Набор недели называется датой её воскресенья."""
+    sunday = today - dt.timedelta(days=(today.weekday() + 1) % 7)
+    return os.path.join(TEMPLATES, sunday.isoformat())
+
+
+def git_save(path, message):
+    """В GitHub Actions сохраняет картинку в репозиторий, чтобы следующие запуски её видели."""
+    if os.environ.get("GIT_PUSH") != "1":
+        return
+    run = lambda *a: subprocess.run(["git", "-C", HERE, *a], check=True, capture_output=True)
+    run("add", path)
+    run("-c", "user.name=gladkie-bot", "-c", "user.email=bot@users.noreply.github.com", "commit", "-m", message)
+    for _ in range(3):
+        try:
+            run("pull", "--rebase", "origin", "main"); run("push", "origin", "HEAD:main"); return
+        except subprocess.CalledProcessError:
+            time.sleep(3)
+    raise RuntimeError("не удалось сохранить картинку в репозиторий")
+
+
+def save_template(chat, m):
+    if m.get("photo"):
+        fid = m["photo"][-1]["file_id"]; uid = m["photo"][-1]["file_unique_id"]
+    else:
+        fid = m["document"]["file_id"]; uid = m["document"]["file_unique_id"]
+    info = api("getFile", file_id=fid)
+    data = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{info['file_path']}", timeout=120).content
+    folder = week_folder(dt.datetime.now(MSK).date())
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{uid}.jpg")
+    from PIL import Image
+    import io
+    Image.open(io.BytesIO(data)).convert("RGB").save(path, quality=92)
+    git_save(path, f"Картинка для роликов {os.path.basename(folder)}")
+    n = len(glob.glob(os.path.join(folder, "*.jpg")))
+    api("sendMessage", chat_id=chat, text=f"Картинку сохранил, в наборе этой недели их {n}. Ролики будут с ними.")
+
+
+def ask_templates():
+    api("sendMessage", chat_id=ADMIN, text=ASK_TEXT)
+
+
 def on_message(m):
     chat = str(m["chat"]["id"])
     text = m.get("text", "")
@@ -142,6 +195,10 @@ def on_message(m):
         if m["chat"]["type"] == "private":
             api("sendMessage", chat_id=chat,
                 text=f"Этот бот работает только для владельца канала. Ваш id: {chat}")
+        return
+    doc = m.get("document") or {}
+    if m.get("photo") or doc.get("mime_type", "").startswith("image/"):
+        save_template(chat, m)
         return
     if not text or text.startswith("/"):
         api("sendMessage", chat_id=chat, text=HELP)
@@ -199,7 +256,9 @@ def poll(timeout):
 def main():
     if not TOKEN:
         sys.exit("BOT_TOKEN не задан")
-    if "--loop" in sys.argv:  # --loop [секунд]: слушать постоянно или заданное время
+    if "--ask-templates" in sys.argv:
+        ask_templates()
+    elif "--loop" in sys.argv:  # --loop [секунд]: слушать постоянно или заданное время
         i = sys.argv.index("--loop")
         stop = time.time() + float(sys.argv[i + 1]) if len(sys.argv) > i + 1 else float("inf")
         while time.time() < stop:
