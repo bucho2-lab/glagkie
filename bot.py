@@ -42,7 +42,10 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
 HELP = ("Пришлите дату и время свободных окон, например:\n"
         "30.09 11:00, 13:30 или 14:00, 18:00\n"
         "завтра 12:00 15:00\n"
-        "Можно несколько строк, по ролику на каждую дату. Картинки для фона присылайте фото. "
+        "Можно несколько строк, по ролику на каждую дату.\n"
+        "Своя фраза для ролика — первой строкой, без даты, например:\n"
+        "Осень — время гладкой кожи\n30.09 11:00, 15:00\n"
+        "Фоны: присылайте вертикальные видео (5–15 с) или фото файлом — так качество лучше. "
         "Я пришлю превью, а в канал оно уйдёт только после кнопки «Опубликовать».")
 
 
@@ -52,6 +55,9 @@ def api(method, files=None, **params):
     if not js.get("ok"):
         raise RuntimeError(f"{method}: {js.get('description')}")
     return js["result"]
+
+
+DATE_START = re.compile(r"^(\d{1,2}[./]\d{1,2}|сегодня|завтра|послезавтра)")
 
 
 def parse_line(line, today):
@@ -102,9 +108,10 @@ def parse_line(line, today):
     return date, times
 
 
-def caption(date, times):
+def caption(date, times, phrase=None):
     """Подпись как в постах канала (parse_mode=HTML)."""
-    slogan = SLOGANS[date.toordinal() % len(SLOGANS)]
+    import html
+    slogan = html.escape(phrase) if phrase else SLOGANS[date.toordinal() % len(SLOGANS)]
     return (f"🍃 Свободное время 🍃\n"
             f"📆 <b>{date.day} {MONTHS[date.month - 1]} - {DAYS[date.weekday()]}</b>\n"
             f"🕐 {', '.join(times)}\n\n"
@@ -120,29 +127,30 @@ def caption(date, times):
             f"#лазернаяэпиляция #лазер #москва #кожухово #дмитриевского")
 
 
-def render(date, times, out):
+def render(date, times, out, phrase=None):
+    extra = ["--slogan", phrase] if phrase else []
     r = subprocess.run([sys.executable, os.path.join(HERE, "make_video.py"), "--date", date.isoformat(),
-                        "--slots", *times, "-o", out], capture_output=True, text=True)
+                        "--slots", *times, *extra, "-o", out], capture_output=True, text=True)
     if r.returncode:
         raise RuntimeError("не получилось собрать ролик: " + (r.stderr.strip().splitlines() or ["?"])[-1])
 
 
-def send_preview(chat, date, times):
+def send_preview(chat, date, times, phrase=None):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, f"okna_{date.isoformat()}.mp4")
-        render(date, times, path)
+        render(date, times, path, phrase)
         with open(path, "rb") as f:
-            msg = api("sendVideo", files={"video": f}, chat_id=chat, caption=caption(date, times), parse_mode="HTML",
-                      width=720, height=1280, supports_streaming="true")
+            msg = api("sendVideo", files={"video": f}, chat_id=chat, caption=caption(date, times, phrase), parse_mode="HTML",
+                      width=1080, height=1920, supports_streaming="true")
     kb = '{"inline_keyboard":[[{"text":"Опубликовать","callback_data":"pub:%d"},' \
          '{"text":"Отменить","callback_data":"del:%d"}]]}' % (msg["message_id"], msg["message_id"])
     api("editMessageReplyMarkup", chat_id=chat, message_id=msg["message_id"], reply_markup=kb)
 
 
 TEMPLATES = os.path.join(HERE, "assets", "templates")
-ASK_TEXT = ("Воскресенье: пришлите, пожалуйста, новые картинки для роликов на эту неделю. "
-            "Просто отправьте их сюда фото (лучше вертикальные, без надписей). "
-            "Если не пришлёте, останутся картинки прошлой недели.")
+ASK_TEXT = ("Воскресенье: пришлите, пожалуйста, новые фоны для роликов на эту неделю. "
+            "Лучше всего короткие вертикальные видео (5–15 секунд) или фото, отправленные файлом, "
+            "без надписей. Если не пришлёте, останутся фоны прошлой недели.")
 
 
 def week_folder(today):
@@ -156,7 +164,7 @@ def git_save(path, message):
     if os.environ.get("GIT_PUSH") != "1":
         return
     run = lambda *a: subprocess.run(["git", "-C", HERE, *a], check=True, capture_output=True)
-    run("add", path)
+    run("add", "-f", path)
     run("-c", "user.name=gladkie-bot", "-c", "user.email=bot@users.noreply.github.com", "commit", "-m", message)
     for _ in range(3):
         try:
@@ -166,22 +174,61 @@ def git_save(path, message):
     raise RuntimeError("не удалось сохранить картинку в репозиторий")
 
 
-def save_template(chat, m):
+def media_of(m):
+    """Что прислали: ("image"|"video", file) или None."""
+    doc = m.get("document") or {}
+    mime = doc.get("mime_type", "")
     if m.get("photo"):
-        fid = m["photo"][-1]["file_id"]; uid = m["photo"][-1]["file_unique_id"]
-    else:
-        fid = m["document"]["file_id"]; uid = m["document"]["file_unique_id"]
-    info = api("getFile", file_id=fid)
-    data = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{info['file_path']}", timeout=120).content
+        return "image", m["photo"][-1]
+    if mime.startswith("image/") or doc.get("file_name", "").lower().endswith((".heic", ".heif")):
+        return "image", doc
+    if m.get("video"):
+        return "video", m["video"]
+    if m.get("animation"):
+        return "video", m["animation"]
+    if mime.startswith("video/"):
+        return "video", doc
+    return None
+
+
+def save_template(chat, m, kind, f):
+    if f.get("file_size", 0) > 20 * 1024 * 1024:
+        api("sendMessage", chat_id=chat, text="Файл больше 20 МБ, Telegram не даёт боту его скачать. "
+                                              "Пришлите покороче или сожмите, пожалуйста.")
+        return
+    info = api("getFile", file_id=f["file_id"])
+    data = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{info['file_path']}", timeout=300).content
     folder = week_folder(dt.datetime.now(MSK).date())
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{uid}.jpg")
-    from PIL import Image
-    import io
-    Image.open(io.BytesIO(data)).convert("RGB").save(path, quality=92)
-    git_save(path, f"Картинка для роликов {os.path.basename(folder)}")
-    n = len(glob.glob(os.path.join(folder, "*.jpg")))
-    api("sendMessage", chat_id=chat, text=f"Картинку сохранил, в наборе этой недели их {n}. Ролики будут с ними.")
+    uid = f["file_unique_id"]
+    if kind == "image":
+        from PIL import Image, ImageOps
+        import io
+        try:
+            import pillow_heif; pillow_heif.register_heif_opener()  # фото с iPhone
+        except ImportError:
+            pass
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+        im.thumbnail((2160, 3840))  # полное качество, но не больше 4K
+        path = os.path.join(folder, f"{uid}.jpg")
+        im.save(path, quality=94)
+        what = "Картинку"
+    else:
+        import imageio_ffmpeg
+        with tempfile.NamedTemporaryFile(suffix=".bin") as src:
+            src.write(data); src.flush()
+            path = os.path.join(folder, f"{uid}.mp4")
+            r = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", src.name,
+                                "-t", "15", "-an", "-vf",
+                                "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30",
+                                "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p", path],
+                               capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError("не получилось обработать видео")
+        what = "Видео"
+    git_save(path, f"Фон для роликов {os.path.basename(folder)}")
+    n = len([p for p in glob.glob(os.path.join(folder, "*")) if p.endswith((".jpg", ".mp4"))])
+    api("sendMessage", chat_id=chat, text=f"{what} сохранил, фонов в наборе этой недели: {n}. Ролики будут с ними.")
 
 
 def ask_templates():
@@ -196,16 +243,20 @@ def on_message(m):
             api("sendMessage", chat_id=chat,
                 text=f"Этот бот работает только для владельца канала. Ваш id: {chat}")
         return
-    doc = m.get("document") or {}
-    if m.get("photo") or doc.get("mime_type", "").startswith("image/"):
-        save_template(chat, m)
+    media = media_of(m)
+    if media:
+        save_template(chat, m, *media)
         return
     if not text or text.startswith("/"):
         api("sendMessage", chat_id=chat, text=HELP)
         return
     today = dt.datetime.now(MSK).date()
+    lines = [l for l in text.splitlines() if l.strip()]
+    phrase = None
+    if len(lines) > 1 and not DATE_START.match(lines[0].strip().lower()):
+        phrase = lines.pop(0).strip()  # первая строка без даты — фраза дня
     try:
-        items = [p for p in (parse_line(l, today) for l in text.splitlines()) if p]
+        items = [p for p in (parse_line(l, today) for l in lines) if p]
     except ValueError as e:
         api("sendMessage", chat_id=chat, text=f"Не понял: {e}.\n\n{HELP}")
         return
@@ -214,7 +265,7 @@ def on_message(m):
         return
     api("sendMessage", chat_id=chat, text="Делаю ролик, это около минуты…")
     for date, times in items:
-        send_preview(chat, date, times)
+        send_preview(chat, date, times, phrase)
 
 
 def on_callback(q):

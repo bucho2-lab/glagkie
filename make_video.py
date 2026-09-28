@@ -35,6 +35,7 @@ SLOGANS = [  # фразы из прошлых роликов канала
     "«ГЛАДКИЕ ЛИНИИ» - ЖЕНСКАЯ ЭНЕРГИЯ ЛЮБИТ БЕРЕЖНЫЙ УХОД. ЗАПИШИТЕСЬ НА ПРОЦЕДУРУ - НАПОЛНИТЕСЬ СИЯНИЕМ",
     "КОГДА ЖЕНЩИНА НАЧИНАЕТ ЗАБОТИТЬСЯ О СЕБЕ ОНА НЕ СТАНОВИТСЯ ЭГОИСТКОЙ. ОНА СТАНОВИТСЯ СЧАСТЛИВОЙ",
 ]
+BEATS = []  # доли такта текущего трека
 LOGO_C, LOGO_R = (288, 1604), 230  # логотип слева внизу, как в роликах канала
 RIGHT_X = 800                        # колонка справа от логотипа
 
@@ -50,7 +51,7 @@ def textlen(text, f): return ImageDraw.Draw(Image.new("L", (1, 1))).textlength(t
 def pictures():
     """Картинки самого свежего набора; 0000-default — запасной."""
     for d in sorted((d for d in glob.glob(os.path.join(TEMPLATES, "*")) if os.path.isdir(d)), reverse=True):
-        pics = sorted(glob.glob(os.path.join(d, "*.jpg")) + glob.glob(os.path.join(d, "*.png")))
+        pics = sorted(sum((glob.glob(os.path.join(d, e)) for e in ("*.jpg", "*.png", "*.mp4")), []))
         if pics:
             return pics
     raise SystemExit("нет картинок в assets/templates")
@@ -73,6 +74,66 @@ def bg_frame(pic, t):
     w, h = W / z, H / z
     x, y = (pic.width - w) / 2, (pic.height - h) / 2
     return pic.resize((W, H), Image.BICUBIC, box=(x, y, x + w, y + h)).convert("RGBA")
+
+
+class VideoBg:
+    """Видео-фон: кадрируется под 9:16 и крутится по кругу, если короче ролика."""
+    def __init__(self, path):
+        self.path = path
+        vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},format=rgb24"
+        self.proc = subprocess.Popen([FF, "-loglevel", "error", "-stream_loop", "-1", "-i", path, "-t", str(DUR),
+                                      "-vf", vf, "-an", "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
+        self.last = None
+
+    def frame(self, t):
+        raw = self.proc.stdout.read(W * H * 3)
+        if len(raw) == W * H * 3:
+            self.last = Image.frombytes("RGB", (W, H), raw)
+        return self.last.convert("RGBA")
+
+    def still(self, t):
+        raw = subprocess.run([FF, "-loglevel", "error", "-ss", str(t), "-i", self.path, "-frames:v", "1",
+                              "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}",
+                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True).stdout
+        if len(raw) < W * H * 3:  # короткое видео: берём первый кадр
+            raw = subprocess.run([FF, "-loglevel", "error", "-i", self.path, "-frames:v", "1", "-vf",
+                                  f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}",
+                                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True).stdout
+        return Image.frombytes("RGB", (W, H), raw[: W * H * 3]).convert("RGBA")
+
+
+class PictureBg:
+    def __init__(self, path):
+        self.pic = load_picture(path)
+
+    def frame(self, t): return bg_frame(self.pic, t)
+    def still(self, t): return bg_frame(self.pic, t)
+
+
+def beats(track):
+    """Доли такта в треке: сила атак звука + темп по автокорреляции."""
+    import numpy as np
+    sr, hop = 22050, 512
+    raw = subprocess.run([FF, "-loglevel", "error", "-stream_loop", "-1", "-i", track, "-t", str(DUR), "-ac", "1",
+                          "-ar", str(sr), "-f", "f32le", "-"], capture_output=True).stdout
+    x = np.frombuffer(raw, np.float32)
+    if len(x) < sr * 2:
+        return [i * 0.5 for i in range(int(DUR * 2))]
+    n = (len(x) - 2048) // hop
+    frames = np.stack([x[i * hop:i * hop + 2048] * np.hanning(2048) for i in range(n)])
+    spec = np.log1p(np.abs(np.fft.rfft(frames, axis=1)))
+    flux = np.maximum(0, np.diff(spec, axis=0)).sum(axis=1)
+    flux = (flux - flux.mean()) / (flux.std() + 1e-9)
+    fps = sr / hop
+    lags = np.arange(int(fps * 60 / 170), int(fps * 60 / 70))
+    ac = [np.dot(flux[:-l], flux[l:]) for l in lags]
+    period = lags[int(np.argmax(ac))]
+    phase = max(range(period), key=lambda p: flux[p::period].sum())
+    return [(phase + i * period) / fps for i in range(int((len(flux) - phase) / period) + 1)]
+
+
+def snap(t, grid):
+    return min(grid, key=lambda g: abs(g - t)) if grid else t
 
 
 class Palette:
@@ -149,9 +210,11 @@ class El:
             off = (1 - a) * 130
             dx = {"left": -off, "right": off}.get(self.kind, 0)
             dy = off * 0.5 if self.kind == "up" else 0
-        if self.pulse and a >= 1:
-            s = 1 + 0.018 * math.sin((t - self.start) * 3)
-            img = img.resize((int(img.width * s), int(img.height * s)), Image.BILINEAR)
+        if self.pulse and a >= 1 and BEATS:
+            since = min((t - b for b in BEATS if b <= t), default=9)
+            s = 1 + 0.035 * math.exp(-since * 9)  # «толчок» на каждую долю
+            if s > 1.002:
+                img = img.resize((int(img.width * s), int(img.height * s)), Image.BILINEAR)
         if a < 1:
             img = img.copy(); img.putalpha(img.getchannel("A").point(lambda v: int(v * a)))
         fr.alpha_composite(img, (int(self.cx - img.width / 2 + dx), int(self.cy - img.height / 2 + dy)))
@@ -214,7 +277,8 @@ class Logo:
 
     def draw(self, fr, t):
         a = ease(t / 0.5)
-        s = (0.9 + 0.1 * a) * (1 + (0.015 * math.sin(t * 1.6) if self.glint else 0))
+        since = min((t - b for b in BEATS if b <= t), default=9)
+        s = (0.9 + 0.1 * a) * (1 + 0.02 * math.exp(-since * 8))  # логотип отзывается на доли
         size = int(LOGO_R * 2 * s)
         im = self.img.resize((size, size), Image.BILINEAR)
         k = (t % 4.0) / 0.9
@@ -258,7 +322,7 @@ def wrap(text, f, width):
     return lines + [cur] if cur else lines
 
 
-def build(style, date, slots, slogan, pal):
+def build(style, date, slots, slogan, pal, phrase=None):
     els, pills = [], []
 
     def label(text, f, cx, cy, start, dark=INK):
@@ -269,12 +333,20 @@ def build(style, date, slots, slogan, pal):
     n = len(slots)
     if style == "lines":
         label("СВОБОДНОЕ ВРЕМЯ", font(80), W / 2, 330, 0.3, ACCENT)
-        label("«Гладкие линии» · лазерная эпиляция", font(44), W / 2, 415, 0.6)
-        label(f"{date.day} {MONTHS[date.month - 1]}", font(112), W / 2, 545, 1.1)
-        label(DAYS[date.weekday()], font(56), W / 2, 660, 1.3)
-        top, t_slot = 760, 1.9
+        y = 415
+        if phrase:  # фраза дня от Ивана вместо подзаголовка
+            f = font(42)
+            for i, ln in enumerate(wrap(phrase, f, 900)[:3]):
+                label(ln, f, W / 2, y, 0.6 + 0.18 * i); y += 54
+            y -= 54
+        else:
+            label("«Гладкие линии» · лазерная эпиляция", font(44), W / 2, y, 0.6)
+        label(f"{date.day} {MONTHS[date.month - 1]}", font(112), W / 2, y + 130, 1.1)
+        label(DAYS[date.weekday()], font(56), W / 2, y + 245, 1.3)
+        top, t_slot = y + 345, 1.9
     else:
         f = font(44); y = 190
+        slogan = phrase.upper() if phrase else slogan
         for i, ln in enumerate(wrap(slogan, f, 720)):
             label(ln, f, W / 2, y, 0.7 + 0.18 * i); y += 56
         top, t_slot = y + 40, 0.9 + 0.18 * len(wrap(slogan, f, 720))
@@ -293,7 +365,7 @@ def build(style, date, slots, slogan, pal):
             light = pal.light((cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2))
             img, mask = pill_sprite(pw, ph, sl, tf, style, light)
             e = El(img, cx, cy, t_slot + (0.3 if style == "lines" else 0.13) * j,
-                   "rise" if style == "lines" else kind, mask, pulse=style == "lines")
+                   "rise" if style == "lines" else kind, mask, pulse=True)
             els.append(e); pills.append(e); j += 1
 
     t0 = t_slot + (0.3 if style == "lines" else 0.13) * j + 0.2
@@ -314,21 +386,29 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--date", required=True, help="ГГГГ-ММ-ДД")
     p.add_argument("--slots", nargs="+", required=True, help='время, например 11:00 "13:30 или 14:00"')
-    p.add_argument("--picture"); p.add_argument("--slogan")
+    p.add_argument("--picture", help="картинка или видео для фона")
+    p.add_argument("--slogan", help="своя фраза дня")
     p.add_argument("--style", choices=["lines", "glass"], help="по умолчанию чередуются по дням")
     p.add_argument("-o", "--out", default="slot.mp4")
     a = p.parse_args()
     date = dt.date.fromisoformat(a.date)
     k = date.toordinal()
     pics = pictures()
-    pic = load_picture(a.picture or pics[k % len(pics)])
+    src = a.picture or pics[k % len(pics)]
+    bg = VideoBg(src) if src.lower().endswith((".mp4", ".mov")) else PictureBg(src)
     style = a.style or ("glass", "lines")[k % 2]
-    pal = Palette(bg_frame(pic, DUR / 2))
-    els, pills = build(style, date, a.slots[:10], a.slogan or SLOGANS[k % len(SLOGANS)], pal)
-    logo, sparkles = Logo(glint=style == "glass"), Sparkles(k) if style == "glass" else None
+    pal = Palette(bg.still(DUR / 2))
 
     with tempfile.TemporaryDirectory() as tmp:
         track = MUSIC[k % len(MUSIC)] if MUSIC else music.compose(DUR, k, os.path.join(tmp, "music.wav"))
+        BEATS[:] = beats(track)
+        els, pills = build(style, date, a.slots[:10], SLOGANS[k % len(SLOGANS)], pal, a.slogan)
+        # надписи появляются в такт: момент появления притягивается к ближайшей доле или полудоле
+        grid = sorted(set(BEATS + [(x + y) / 2 for x, y in zip(BEATS, BEATS[1:])]))
+        for e in els:
+            e.start = snap(e.start, grid)
+        logo, sparkles = Logo(glint=style == "glass"), Sparkles(k) if style == "glass" else None
+        downbeats = BEATS[4::4]
         cmd = [FF, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
                "-r", str(FPS), "-i", "-", "-stream_loop", "-1", "-i", track, "-map", "0:v", "-map", "1:a",
                "-af", f"afade=t=in:d=0.5,afade=t=out:st={DUR - 1.5}:d=1.5", "-c:a", "aac", "-b:a", "128k",
@@ -337,15 +417,17 @@ def main():
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         for i in range(int(DUR * FPS)):
             t = i / FPS
-            fr = bg_frame(pic, t)
+            fr = bg.frame(t)
             if style == "lines":
                 waves(fr, t)
             logo.draw(fr, t)
             for e in els:
                 e.draw(fr, t)
             if style == "glass":
-                for j, e in enumerate(pills):
-                    e.glint(fr, t, 5.0 + 0.1 * j); e.glint(fr, t, 9.0 + 0.1 * j)
+                for j, e in enumerate(pills):  # блики по плашкам на сильные доли
+                    for db in downbeats:
+                        if db > 3.5:
+                            e.glint(fr, t, db + 0.06 * j)
                 sparkles.draw(fr, t)
             proc.stdin.write(fr.convert("RGB").tobytes())
         proc.stdin.close()
