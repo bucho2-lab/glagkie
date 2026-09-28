@@ -22,4 +22,3 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
           CHANNEL: ${{ vars.CHANNEL || '@gladkie_linii_msk' }}
-          FOOTER: ${{ vars.FOOTER || 'Запись: +7 (905) 537-27-07' }}

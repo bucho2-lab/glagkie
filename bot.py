@@ -5,7 +5,6 @@
   BOT_TOKEN      токен от @BotFather (секрет)
   ADMIN_CHAT_ID  id чата Ивана; только ему бот отвечает и присылает превью
   CHANNEL        канал для публикации, по умолчанию @gladkie_linii_msk
-  FOOTER         подпись внизу ролика (как записаться)
 
 Режимы:
   python3 bot.py          один проход по новым сообщениям (для GitHub Actions по расписанию)
@@ -23,7 +22,6 @@ MSK = ZoneInfo("Europe/Moscow")
 TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN = os.environ.get("ADMIN_CHAT_ID", "")
 CHANNEL = os.environ.get("CHANNEL", "@gladkie_linii_msk")
-FOOTER = os.environ.get("FOOTER", "Запись: +7 (905) 537-27-07")
 API = f"https://api.telegram.org/bot{TOKEN}/"
 
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -37,7 +35,7 @@ SLOGANS = [
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря"]
 HELP = ("Пришлите дату и время свободных окон, например:\n"
-        "30.09 11:00, 14:30, 18:00\n"
+        "30.09 11:00, 13:30 или 14:00, 18:00\n"
         "завтра 12:00 15:00\n"
         "Можно несколько строк, по ролику на каждую дату. "
         "Я пришлю превью, а в канал оно уйдёт только после кнопки «Опубликовать».")
@@ -75,19 +73,27 @@ def parse_line(line, today):
         if not y and date < today - dt.timedelta(days=7):
             date = date.replace(year=year + 1)
         rest = s[m.end():]
-    times = []
-    for h, mi in re.findall(r"\b(\d{1,2})(?:[:.](\d{2}))?\b", rest):
+    times = []  # каждое окно: "14:00" или "13:30 или 14:00"
+    join = False
+    for tok in re.findall(r"\d{1,2}(?:[:.\-]\d{2})?|или|/", rest):
+        if tok in ("или", "/"):
+            join = bool(times)
+            continue
+        h, _, mi = re.sub(r"[.\-]", ":", tok).partition(":")
         h, mi = int(h), int(mi or 0)
         if h > 23 or mi > 59:
-            raise ValueError(f"странное время: {h}:{mi:02d}")
+            raise ValueError(f"странное время: {tok}")
         t = f"{h:02d}:{mi:02d}"
-        if t not in times:
+        if join:
+            times[-1] += f" или {t}"
+        elif t not in times:
             times.append(t)
+        join = False
     if not times:
         raise ValueError(f"не нашёл время в «{line.strip()}» (нужно, например, 14:30)")
-    if len(times) > 5:
-        raise ValueError("в одном ролике помещается до 5 окон, разбейте на две строки")
-    times.sort()
+    if len(times) > 10:
+        raise ValueError("в одном ролике помещается до 10 окон, разбейте на две строки")
+    times.sort(key=lambda s: s[:5])
     return date, times
 
 
@@ -111,7 +117,7 @@ def caption(date, times):
 
 def render(date, times, out):
     subprocess.run([sys.executable, os.path.join(HERE, "make_video.py"), "--date", date.isoformat(),
-                    "--times", *times, "--footer", FOOTER, "-o", out], check=True, capture_output=True)
+                    "--slots", *times, "-o", out], check=True, capture_output=True)
 
 
 def send_preview(chat, date, times):
@@ -120,7 +126,7 @@ def send_preview(chat, date, times):
         render(date, times, path)
         with open(path, "rb") as f:
             msg = api("sendVideo", files={"video": f}, chat_id=chat, caption=caption(date, times), parse_mode="HTML",
-                      width=1080, height=1920, supports_streaming="true")
+                      width=720, height=1280, supports_streaming="true")
     kb = '{"inline_keyboard":[[{"text":"Опубликовать","callback_data":"pub:%d"},' \
          '{"text":"Отменить","callback_data":"del:%d"}]]}' % (msg["message_id"], msg["message_id"])
     api("editMessageReplyMarkup", chat_id=chat, message_id=msg["message_id"], reply_markup=kb)

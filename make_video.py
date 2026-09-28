@@ -1,120 +1,181 @@
 #!/usr/bin/env python3
-"""Короткий вертикальный ролик о свободных окнах.
+"""Ролик «Свободное время» в стиле канала «Гладкие линии».
+
+Фон из assets/backgrounds (фото с медленным приближением), музыка из assets/music,
+логотип assets/logo.png, шрифт Prata. Фон и музыка выбираются по дате, их можно задать явно.
 
 Пример:
-  python3 make_video.py --date 2026-09-30 --times 11:00 14:30 18:00 -o out.mp4
+  python3 make_video.py --date 2026-09-30 --slots 11:00 "13:30 или 14:00" 18:00 -o out.mp4
 """
-import argparse, datetime as dt, math, subprocess
+import argparse, datetime as dt, glob, os, subprocess
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import imageio_ffmpeg
 
-W, H, FPS, DUR = 1080, 1920, 30, 12.0
-HERE = __import__("os").path.dirname(__import__("os").path.abspath(__file__))
-FONT_B = HERE + "/fonts/DejaVuSans-Bold.ttf"
-FONT_R = HERE + "/fonts/DejaVuSans.ttf"
-BG_TOP, BG_BOT = (250, 232, 226), (231, 196, 190)
-INK, ACCENT, SOFT = (74, 44, 52), (176, 92, 104), (255, 255, 255)
-ADDRESS = "ул. Дмитриевского, 3 · бесплатная парковка"
-DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
-MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
-          "августа", "сентября", "октября", "ноября", "декабря"]
+HERE = os.path.dirname(os.path.abspath(__file__))
+W, H, FPS, DUR = 720, 1280, 30, 12.0
+FONT = os.path.join(HERE, "fonts", "Prata-Regular.ttf")
+LOGO = os.path.join(HERE, "assets", "logo.png")
+BACKGROUNDS = sorted(glob.glob(os.path.join(HERE, "assets", "backgrounds", "*.jpg")))
+MUSIC = sorted(glob.glob(os.path.join(HERE, "assets", "music", "*.m4a")))
+MONTHS = ["ЯНВАРЯ", "ФЕВРАЛЯ", "МАРТА", "АПРЕЛЯ", "МАЯ", "ИЮНЯ", "ИЮЛЯ",
+          "АВГУСТА", "СЕНТЯБРЯ", "ОКТЯБРЯ", "НОЯБРЯ", "ДЕКАБРЯ"]
+DAYS = ["ПОНЕДЕЛЬНИК", "ВТОРНИК", "СРЕДА", "ЧЕТВЕРГ", "ПЯТНИЦА", "СУББОТА", "ВОСКРЕСЕНЬЕ"]
+# Фразы из прошлых роликов канала.
+SLOGANS = [
+    "«ГЛАДКИЕ ЛИНИИ» - СВОБОДА - ЭТО ПРОСНУТЬСЯ И НЕ ДУМАТЬ О БРИТВЕ.",
+    "«ГЛАДКИЕ ЛИНИИ» - УХОД ЗА СОБОЙ - ЭТО НЕ ТРАТА ВРЕМЕНИ. ЭТО ИНВЕСТИЦИЯ В СВОЕ «ЗАВТРА»",
+    "«ГЛАДКИЕ ЛИНИИ» - УХОЖЕННАЯ ЖЕНЩИНА - СЧАСТЛИВАЯ ЖЕНЩИНА",
+    "«ГЛАДКИЕ ЛИНИИ» - ВАША КОЖА БЕЗУПРЕЧНА КАЖДЫЙ ДЕНЬ!",
+    "«ГЛАДКИЕ ЛИНИИ» - ЖЕНСКАЯ ЭНЕРГИЯ ЛЮБИТ БЕРЕЖНЫЙ УХОД. ЗАПИШИТЕСЬ НА ПРОЦЕДУРУ - НАПОЛНИТЕСЬ СИЯНИЕМ",
+    "КОГДА ЖЕНЩИНА НАЧИНАЕТ ЗАБОТИТЬСЯ О СЕБЕ ОНА НЕ СТАНОВИТСЯ ЭГОИСТКОЙ. ОНА СТАНОВИТСЯ СЧАСТЛИВОЙ",
+]
+WHITE = (255, 255, 255)
+LOGO_C, LOGO_R = (192, 1069), 153
 
-def font(path, size): return ImageFont.truetype(path, size)
-def ease(t): t = max(0.0, min(1.0, t)); return 1 - (1 - t) ** 3
-def appear(t, start, dur=0.6): return ease((t - start) / dur)
 
-def background():
-    bg = Image.new("RGB", (W, H))
-    d = ImageDraw.Draw(bg)
-    for y in range(H):
-        k = y / H
-        d.line([(0, y), (W, y)], fill=tuple(int(a + (b - a) * k) for a, b in zip(BG_TOP, BG_BOT)))
-    return bg
+def font(size): return ImageFont.truetype(FONT, size)
 
-def waves(t):
+
+def wrap(d, text, f, width):
+    lines, cur = [], ""
+    for word in text.split():
+        test = f"{cur} {word}".strip()
+        if cur and d.textlength(test, font=f) > width:
+            lines.append(cur); cur = word
+        else:
+            cur = test
+    return lines + [cur] if cur else lines
+
+
+def shadow_text(layer, xy, text, f, anchor="mm", blur=3, alpha=150):
+    """Белый текст с мягкой тенью, как в роликах канала."""
+    sh = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).text((xy[0] + 2, xy[1] + 3), text, font=f, fill=(0, 0, 0, alpha), anchor=anchor)
+    layer.alpha_composite(sh.filter(ImageFilter.GaussianBlur(blur)))
+    ImageDraw.Draw(layer).text(xy, text, font=f, fill=WHITE + (255,), anchor=anchor)
+
+
+def clock_icon(d, cx, cy, r, color):
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=2)
+    d.line([cx, cy, cx, cy - r * 0.6], fill=color, width=2)
+    d.line([cx, cy, cx + r * 0.45, cy + r * 0.25], fill=color, width=2)
+
+
+def pill(layer, box, text, f):
+    x0, y0, x1, y1 = box
+    d = ImageDraw.Draw(layer)
+    d.rounded_rectangle(box, radius=(y1 - y0) / 2, fill=(255, 255, 255, 38), outline=(255, 255, 255, 150), width=2)
+    h = y1 - y0
+    clock_icon(d, x0 + h * 0.55, (y0 + y1) / 2, h * 0.2, (255, 255, 255, 120))
+    shadow_text(layer, ((x0 + x1) / 2 + h * 0.15, (y0 + y1) / 2), text, f)
+
+
+def overlay(date, slots, slogan):
+    """Всё, кроме логотипа: фраза, плашки с временем, дата. Рисуется один раз."""
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    for i in range(4):
-        pts = []
-        base = 1500 + i * 70
-        for x in range(-20, W + 40, 20):
-            y = base + 60 * math.sin(x / 260 + t * 0.9 + i * 0.8) + 25 * math.sin(x / 90 - t * 0.6 + i)
-            pts.append((x, y))
-        d.line(pts, fill=(255, 255, 255, 110 - i * 20), width=5)
-    for i in range(3):
-        pts = []
-        for x in range(-20, W + 40, 20):
-            y = 250 + i * 55 + 45 * math.sin(x / 300 - t * 0.7 + i * 1.3)
-            pts.append((x, y))
-        d.line(pts, fill=(255, 255, 255, 90 - i * 25), width=4)
-    return layer.filter(ImageFilter.GaussianBlur(1))
 
-def centered(d, y, text, f, fill, alpha=1.0, dy=0):
-    w = d.textlength(text, font=f)
-    d.text(((W - w) / 2, y + (1 - alpha) * 40 + dy), text, font=f, fill=fill + (int(255 * alpha),))
+    f = font(29)
+    lines = wrap(d, slogan, f, 470)
+    y = 170
+    for ln in lines:
+        shadow_text(layer, (W / 2, y), ln, f); y += 37
 
-def frame(t, bg, date, times, footer):
-    img = bg.copy().convert("RGBA")
-    img.alpha_composite(waves(t))
-    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(ov)
+    n = len(slots)
+    ph, gap = (60, 18) if n <= 6 else (52, 14)
+    tf = font(34 if n <= 6 else 30)
+    top = y + 25
+    if n <= 4:  # одна колонка
+        for i, s in enumerate(slots):
+            pw = max(220, d.textlength(s, font=tf) + 130)
+            yy = top + i * (ph + gap)
+            pill(layer, ((W - pw) / 2, yy, (W + pw) / 2, yy + ph), s, tf)
+    else:  # две колонки; «13:30 или 14:00» и непарная плашка идут отдельной строкой по центру
+        rows, pair = [], []
+        for sl in slots:
+            if "или" in sl:
+                if pair: rows.append(pair); pair = []
+                rows.append([sl])
+            else:
+                pair.append(sl)
+                if len(pair) == 2: rows.append(pair); pair = []
+        if pair: rows.append(pair)
+        cw = 270
+        for r, row in enumerate(rows):
+            yy = top + r * (ph + gap)
+            if len(row) == 1:
+                pw = max(cw, d.textlength(row[0], font=tf) + 130)
+                pill(layer, ((W - pw) / 2, yy, (W + pw) / 2, yy + ph), row[0], tf)
+            else:
+                for c, sl in enumerate(row):
+                    x0 = 80 + c * (cw + 20)
+                    pill(layer, (x0, yy, x0 + cw, yy + ph), sl, tf)
 
-    a = appear(t, 0.2)
-    centered(d, 470, "СВОБОДНОЕ ВРЕМЯ", font(FONT_B, 76), ACCENT, a)
-    centered(d, 570, "«Гладкие линии» · лазерная эпиляция", font(FONT_R, 46), INK, appear(t, 0.5))
+    cx, fb = 540, font(44)
+    shadow_text(layer, (cx, 930), str(date.day), fb)
+    shadow_text(layer, (cx, 985), MONTHS[date.month - 1], fb)
+    shadow_text(layer, (cx, 1040), DAYS[date.weekday()], font(40 if len(DAYS[date.weekday()]) < 10 else 32))
+    fs = font(40)
+    shadow_text(layer, (cx, 1110), "СВОБОДНОЕ", fs)
+    shadow_text(layer, (cx, 1160), "ВРЕМЯ", fs)
+    return layer
 
-    a = appear(t, 1.1)
-    day = f"{date.day} {MONTHS[date.month - 1]}"
-    centered(d, 720, day, font(FONT_B, 120), INK, a)
-    centered(d, 870, DAYS[date.weekday()], font(FONT_R, 58), INK, appear(t, 1.3))
 
-    n = len(times)
-    fs = 92 if n <= 3 else 72
-    pill_h, gap = fs + 60, 34
-    top = 1020 + max(0, (3 - n)) * 20
-    for i, tm in enumerate(times):
-        a = appear(t, 1.9 + i * 0.35)
-        if a <= 0: continue
-        pulse = 1 + 0.02 * math.sin((t - 1.9 - i * 0.35) * 3) if a >= 1 else 1
-        f = font(FONT_B, int(fs * pulse))
-        tw = d.textlength(tm, font=f)
-        pw = max(tw + 140, 420)
-        y = top + i * (pill_h + gap) + (1 - a) * 50
-        d.rounded_rectangle([(W - pw) / 2, y, (W + pw) / 2, y + pill_h], radius=pill_h / 2,
-                            fill=SOFT + (int(235 * a),), outline=ACCENT + (int(255 * a),), width=4)
-        d.text(((W - tw) / 2, y + (pill_h - fs * pulse) / 2 - 8), tm, font=f, fill=ACCENT + (int(255 * a),))
+def logo_layer():
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    lg = Image.open(LOGO).convert("RGBA").resize((LOGO_R * 2, LOGO_R * 2), Image.LANCZOS)
+    layer.alpha_composite(lg, (LOGO_C[0] - LOGO_R, LOGO_C[1] - LOGO_R))
+    return layer
 
-    fa = appear(t, 1.9 + n * 0.35 + 0.4)
-    ff = font(FONT_B, 54)
-    while d.textlength(footer, font=ff) > W - 120 and ff.size > 28:
-        ff = font(FONT_B, ff.size - 2)
-    centered(d, 1700, footer, ff, INK, fa)
-    centered(d, 1775, ADDRESS, font(FONT_R, 38), INK, fa)
 
-    img.alpha_composite(ov)
-    fade = min(1.0, t / 0.4, (DUR - t) / 0.5)
-    if fade < 1:
-        img = Image.blend(Image.new("RGBA", (W, H), BG_TOP + (255,)), img, max(0, fade))
-    return img.convert("RGB")
+def background_frame(bg, t):
+    """Медленное приближение фото (эффект живого фона)."""
+    z = 1.0 + 0.08 * (t / DUR)
+    w, h = int(W / z), int(H / z)
+    x, y = (W - w) // 2, (H - h) // 2
+    return bg.crop((x, y, x + w, y + h)).resize((W, H), Image.BILINEAR)
+
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--date", required=True, help="ГГГГ-ММ-ДД")
-    p.add_argument("--times", nargs="+", required=True, help="ЧЧ:ММ ...")
-    p.add_argument("--footer", default="Запись: +7 (905) 537-27-07")
+    p.add_argument("--slots", nargs="+", required=True, help='время, например 11:00 "13:30 или 14:00"')
+    p.add_argument("--slogan"); p.add_argument("--background"); p.add_argument("--music")
     p.add_argument("-o", "--out", default="slot.mp4")
     a = p.parse_args()
     date = dt.date.fromisoformat(a.date)
-    times = sorted(a.times, key=lambda s: tuple(map(int, s.split(":"))))[:5]
-    bg = background()
-    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-           "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-           "-preset", "medium", "-crf", "20", "-movflags", "+faststart", a.out]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    k = date.toordinal()
+    slogan = a.slogan or SLOGANS[k % len(SLOGANS)]
+    bg = Image.open(a.background or BACKGROUNDS[k % len(BACKGROUNDS)]).convert("RGB")
+    bg = bg.resize((W, int(bg.height * W / bg.width))) if bg.width != W else bg
+    bg = bg.crop((0, (bg.height - H) // 2, W, (bg.height - H) // 2 + H)) if bg.height != H else bg
+    music = a.music or (MUSIC[k % len(MUSIC)] if MUSIC else None)
+
+    ov, lg = overlay(date, a.slots[:10], slogan), logo_layer()
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [ff, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
+           "-r", str(FPS), "-i", "-"]
+    if music:
+        cmd += ["-stream_loop", "-1", "-i", music, "-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "128k",
+                "-af", f"afade=t=in:d=0.3,afade=t=out:st={DUR - 1.2}:d=1.2", "-t", str(DUR)]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20",
+            "-movflags", "+faststart", a.out]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     for i in range(int(DUR * FPS)):
-        proc.stdin.write(frame(i / FPS, bg, date, times, a.footer).tobytes())
-    proc.stdin.close(); proc.wait()
+        t = i / FPS
+        fr = background_frame(bg, t).convert("RGBA")
+        fr.alpha_composite(lg)
+        k_in = max(0.0, min(1.0, (t - 0.8) / 0.5))  # текст проявляется после первой секунды
+        if k_in >= 1:
+            fr.alpha_composite(ov)
+        elif k_in > 0:
+            o = ov.copy(); o.putalpha(o.getchannel("A").point(lambda v: int(v * k_in))); fr.alpha_composite(o)
+        proc.stdin.write(fr.convert("RGB").tobytes())
+    proc.stdin.close()
+    if proc.wait():
+        raise SystemExit("ffmpeg error")
     print(a.out)
+
 
 if __name__ == "__main__":
     main()
