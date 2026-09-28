@@ -4,7 +4,7 @@
 Стиль первого варианта: пудрово-розовая дымка, плавные белые линии, надписи и плашки
 с временем появляются по очереди. Фоном идёт картинка из последнего набора assets/templates
 (бот собирает их по воскресеньям), без картинок остаётся розовый градиент.
-Музыку сочиняет music.py, лицензия не нужна.
+Музыка из роликов канала (assets/music), без неё её сочиняет music.py.
 
 Пример:
   python3 make_video.py --date 2026-09-30 --slots 11:00 "13:30 или 14:00" 18:00 -o out.mp4
@@ -20,6 +20,7 @@ FF = imageio_ffmpeg.get_ffmpeg_exe()
 FONT = os.path.join(HERE, "fonts", "Prata-Regular.ttf")
 LOGO = os.path.join(HERE, "assets", "logo.png")
 TEMPLATES = os.path.join(HERE, "assets", "templates")
+MUSIC = sorted(glob.glob(os.path.join(HERE, "assets", "music", "*.m4a")))
 BG_TOP, BG_BOT = (250, 232, 226), (231, 196, 190)
 INK, ACCENT = (74, 44, 52), (176, 92, 104)
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -184,9 +185,11 @@ def main():
     els = build(date, a.slots[:10])
 
     with tempfile.TemporaryDirectory() as tmp:
-        track = music.compose(DUR, date.toordinal(), os.path.join(tmp, "music.wav"))
+        # музыка из роликов канала; если папка пуста — сочиняем свою
+        track = MUSIC[date.toordinal() % len(MUSIC)] if MUSIC else \
+            music.compose(DUR, date.toordinal(), os.path.join(tmp, "music.wav"))
         cmd = [FF, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-               "-r", str(FPS), "-i", "-", "-i", track, "-map", "0:v", "-map", "1:a",
+               "-r", str(FPS), "-i", "-", "-stream_loop", "-1", "-i", track, "-map", "0:v", "-map", "1:a",
                "-af", f"afade=t=in:d=0.5,afade=t=out:st={DUR - 1.5}:d=1.5", "-c:a", "aac", "-b:a", "128k",
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20",
                "-movflags", "+faststart", "-shortest", a.out]
