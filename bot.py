@@ -7,8 +7,9 @@
   CHANNEL        канал для публикации, по умолчанию @gladkie_linii_msk
 
 Режимы:
-  python3 bot.py          один проход по новым сообщениям (для GitHub Actions по расписанию)
-  python3 bot.py --loop   работать постоянно (для своего сервера)
+  python3 bot.py              один проход по новым сообщениям
+  python3 bot.py --loop       работать постоянно (для своего сервера)
+  python3 bot.py --loop 1500  слушать 25 минут (так запускает GitHub Actions)
 
 Состояние не хранится: Telegram сам помнит, какие сообщения уже обработаны (offset),
 а кнопка «Опубликовать» копирует в канал уже присланное превью.
@@ -196,10 +197,12 @@ def poll(timeout):
 def main():
     if not TOKEN:
         sys.exit("BOT_TOKEN не задан")
-    if "--loop" in sys.argv:
-        while True:
+    if "--loop" in sys.argv:  # --loop [секунд]: слушать постоянно или заданное время
+        i = sys.argv.index("--loop")
+        stop = time.time() + float(sys.argv[i + 1]) if len(sys.argv) > i + 1 else float("inf")
+        while time.time() < stop:
             try:
-                poll(50)
+                poll(int(max(1, min(50, stop - time.time()))))
             except Exception as e:
                 print("error:", e, file=sys.stderr)
                 time.sleep(5)
