@@ -14,6 +14,7 @@ FONT_B = HERE + "/fonts/DejaVuSans-Bold.ttf"
 FONT_R = HERE + "/fonts/DejaVuSans.ttf"
 BG_TOP, BG_BOT = (250, 232, 226), (231, 196, 190)
 INK, ACCENT, SOFT = (74, 44, 52), (176, 92, 104), (255, 255, 255)
+ADDRESS = "ул. Дмитриевского, 3 · бесплатная парковка"
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря"]
@@ -59,8 +60,8 @@ def frame(t, bg, date, times, footer):
     d = ImageDraw.Draw(ov)
 
     a = appear(t, 0.2)
-    centered(d, 470, "СВОБОДНЫЕ ОКНА" if len(times) > 1 else "СВОБОДНОЕ ОКНО", font(FONT_B, 76), ACCENT, a)
-    centered(d, 570, "лазерная эпиляция", font(FONT_R, 50), INK, appear(t, 0.5))
+    centered(d, 470, "СВОБОДНОЕ ВРЕМЯ", font(FONT_B, 76), ACCENT, a)
+    centered(d, 570, "«Гладкие линии» · лазерная эпиляция", font(FONT_R, 46), INK, appear(t, 0.5))
 
     a = appear(t, 1.1)
     day = f"{date.day} {MONTHS[date.month - 1]}"
@@ -88,7 +89,7 @@ def frame(t, bg, date, times, footer):
     while d.textlength(footer, font=ff) > W - 120 and ff.size > 28:
         ff = font(FONT_B, ff.size - 2)
     centered(d, 1700, footer, ff, INK, fa)
-    centered(d, 1775, "время московское", font(FONT_R, 38), INK, fa)
+    centered(d, 1775, ADDRESS, font(FONT_R, 38), INK, fa)
 
     img.alpha_composite(ov)
     fade = min(1.0, t / 0.4, (DUR - t) / 0.5)
@@ -100,7 +101,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--date", required=True, help="ГГГГ-ММ-ДД")
     p.add_argument("--times", nargs="+", required=True, help="ЧЧ:ММ ...")
-    p.add_argument("--footer", default="Запись в личных сообщениях")
+    p.add_argument("--footer", default="Запись: +7 (905) 537-27-07")
     p.add_argument("-o", "--out", default="slot.mp4")
     a = p.parse_args()
     date = dt.date.fromisoformat(a.date)

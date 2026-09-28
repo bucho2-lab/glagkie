@@ -23,10 +23,17 @@ MSK = ZoneInfo("Europe/Moscow")
 TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN = os.environ.get("ADMIN_CHAT_ID", "")
 CHANNEL = os.environ.get("CHANNEL", "@gladkie_linii_msk")
-FOOTER = os.environ.get("FOOTER", "Запись в личных сообщениях")
+FOOTER = os.environ.get("FOOTER", "Запись: +7 (905) 537-27-07")
 API = f"https://api.telegram.org/bot{TOKEN}/"
 
-DAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+# Фразы из прошлых постов канала; берутся по очереди по дате.
+SLOGANS = [
+    "Твоя кожа достойна шелка. Доверься световому прикосновению",
+    "Ухоженная женщина - это не про деньги, а про любовь к себе",
+    "Забудьте о воске и сахаре. Осень ~ это время высоких технологий и комфорта 👍",
+    "Природа готовится ко сну, а мы готовим вашу кожу",
+]
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря"]
 HELP = ("Пришлите дату и время свободных окон, например:\n"
@@ -85,10 +92,21 @@ def parse_line(line, today):
 
 
 def caption(date, times):
-    head = "Свободное окно" if len(times) == 1 else "Свободные окна"
-    return (f"{head} на лазерную эпиляцию\n"
-            f"{date.day} {MONTHS[date.month - 1]} ({DAYS[date.weekday()]}): {', '.join(times)}\n"
-            f"{FOOTER}")
+    """Подпись как в постах канала (parse_mode=HTML)."""
+    slogan = SLOGANS[date.toordinal() % len(SLOGANS)]
+    return (f"🍃 Свободное время 🍃\n"
+            f"📆 <b>{date.day} {MONTHS[date.month - 1]} - {DAYS[date.weekday()]}</b>\n"
+            f"🕐 {', '.join(times)}\n\n"
+            f"🌸 <i>{slogan}</i> 🌸\n\n"
+            f"«Гладкие линии» - красота каждый день !\n\n"
+            f'<a href="https://t.me/+79055372707">ЗАПИСЬ / КОНСУЛЬТАЦИЯ ПО ССЫЛКЕ</a> 🔗\n\n'
+            f"———-\n"
+            f"Ⓜ️ Улица Дмитриевского\n"
+            f"📍 Москва, ул. Дмитриевского, 3\n"
+            f"🅿️ Бесплатная парковка\n⠀\n"
+            f"📲 +7 (905) 537-27-07\n⠀\n"
+            f"———-\n"
+            f"#лазернаяэпиляция #лазер #москва #кожухово #дмитриевского")
 
 
 def render(date, times, out):
@@ -101,7 +119,7 @@ def send_preview(chat, date, times):
         path = os.path.join(tmp, f"okna_{date.isoformat()}.mp4")
         render(date, times, path)
         with open(path, "rb") as f:
-            msg = api("sendVideo", files={"video": f}, chat_id=chat, caption=caption(date, times),
+            msg = api("sendVideo", files={"video": f}, chat_id=chat, caption=caption(date, times), parse_mode="HTML",
                       width=1080, height=1920, supports_streaming="true")
     kb = '{"inline_keyboard":[[{"text":"Опубликовать","callback_data":"pub:%d"},' \
          '{"text":"Отменить","callback_data":"del:%d"}]]}' % (msg["message_id"], msg["message_id"])
