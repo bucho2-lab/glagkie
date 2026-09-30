@@ -110,6 +110,17 @@ class PictureBg:
     def still(self, t): return bg_frame(self.pic, t)
 
 
+class PastelBg:
+    """Статичный редакционный фон: сохраняем композицию и не увеличиваем модель."""
+    def __init__(self, path):
+        with Image.open(path) as source:
+            self.pic = ImageOps.fit(ImageOps.exif_transpose(source).convert("RGB"),
+                                    (W, H), Image.Resampling.LANCZOS).convert("RGBA")
+
+    def frame(self, t): return self.pic.copy()
+    def still(self, t): return self.pic.copy()
+
+
 def beats(track):
     """Доли такта в треке: сила атак звука + темп по автокорреляции."""
     import numpy as np
@@ -323,6 +334,8 @@ def wrap(text, f, width):
 
 
 def build(style, date, slots, slogan, pal, phrase=None):
+    if style == "pastel":
+        return build_pastel(date, slots, phrase), []
     els, pills = [], []
 
     def label(text, f, cx, cy, start, dark=INK):
@@ -382,21 +395,69 @@ def build(style, date, slots, slogan, pal, phrase=None):
     return els, pills
 
 
+def build_pastel(date, slots, phrase=None):
+    """Розовый пилот: свободная колонка слева, модель справа, точный текст поверх фото."""
+    els = []
+    ink = (100, 59, 67)
+    accent = (135, 77, 89)
+
+    def label(text, size, cx, cy, start, width=900, color=ink):
+        f = font(size)
+        while textlen(text, f) > width and f.size > 12:
+            f = font(f.size - 1)
+        sprite = text_sprite(text, f, color, (0, 0, 0, 0), pad=4)
+        els.append(El(sprite, cx, cy, start))
+
+    label("ГЛАДКИЕ ЛИНИИ", 46, W / 2, 105, 0.1)
+    label("ЛАЗЕРНАЯ ЭПИЛЯЦИЯ", 24, W / 2, 162, 0.25)
+    title = phrase or "Время для себя"
+    title_font = font(76 if not phrase else 52)
+    while len(wrap(title, title_font, 890)) > 2 and title_font.size > 18:
+        title_font = font(title_font.size - 1)
+    for i, line in enumerate(wrap(title, title_font, 890)):
+        label(line, title_font.size, W / 2, 275 + i * 70, 0.5 + i * 0.15)
+
+    cx, width = 265, 380
+    label(f"{date.day} {MONTHS[date.month - 1]}", 52, cx, 520, 1.0, width)
+    label(DAYS[date.weekday()].upper(), 23, cx, 583, 1.15, width)
+    label("СВОБОДНЫЕ ЧАСЫ", 23, cx, 678, 1.3, width, accent)
+    # Число строк учитывает альтернативы «или»; даже десять окон не заходят в подвал.
+    rows = [wrap(slot, font(44), width) for slot in slots]
+    units = sum(len(row) for row in rows)
+    step = min(115, 740 / max(1, units))
+    y = 770
+    for i, row in enumerate(rows):
+        for line in row:
+            label(line, min(54, int(step * 0.64)), cx, y, 1.6 + i * 0.16, width)
+            y += step
+
+    footer = Image.new("RGBA", (W, 235), (253, 242, 241, 242))
+    els.append(El(footer, W / 2, H - footer.height / 2, 2.9))
+    label("Запись: +7 (905) 537-27-07", 32, W / 2, 1750, 3.1)
+    label("ул. Дмитриевского, 3", 29, W / 2, 1808, 3.25)
+    label("бесплатная парковка", 22, W / 2, 1858, 3.4)
+    return els
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--date", required=True, help="ГГГГ-ММ-ДД")
     p.add_argument("--slots", nargs="+", required=True, help='время, например 11:00 "13:30 или 14:00"')
     p.add_argument("--picture", help="картинка или видео для фона")
     p.add_argument("--slogan", help="своя фраза дня")
-    p.add_argument("--style", choices=["lines", "glass"], help="по умолчанию чередуются по дням")
+    p.add_argument("--style", choices=["lines", "glass", "pastel"], default="pastel", help="по умолчанию розовый пастельный пилот")
+    p.add_argument("--poster", help="дополнительно сохранить итоговый кадр в PNG")
     p.add_argument("-o", "--out", default="slot.mp4")
     a = p.parse_args()
     date = dt.date.fromisoformat(a.date)
     k = date.toordinal()
-    pics = pictures()
-    src = a.picture or pics[k % len(pics)]
-    bg = VideoBg(src) if src.lower().endswith((".mp4", ".mov")) else PictureBg(src)
-    style = a.style or ("glass", "lines")[k % 2]
+    style = a.style
+    if style == "pastel":
+        src = a.picture or os.path.join(HERE, "assets", "pastel", "pink.png")
+    else:
+        pics = pictures()
+        src = a.picture or pics[k % len(pics)]
+    bg = VideoBg(src) if src.lower().endswith((".mp4", ".mov")) else (PastelBg(src) if style == "pastel" else PictureBg(src))
     pal = Palette(bg.still(DUR / 2))
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -407,7 +468,8 @@ def main():
         grid = sorted(set(BEATS + [(x + y) / 2 for x, y in zip(BEATS, BEATS[1:])]))
         for e in els:
             e.start = snap(e.start, grid)
-        logo, sparkles = Logo(glint=style == "glass"), Sparkles(k) if style == "glass" else None
+        logo = None if style == "pastel" else Logo(glint=style == "glass")
+        sparkles = Sparkles(k) if style == "glass" else None
         downbeats = BEATS[4::4]
         cmd = [FF, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
                "-r", str(FPS), "-i", "-", "-stream_loop", "-1", "-i", track, "-map", "0:v", "-map", "1:a",
@@ -420,7 +482,8 @@ def main():
             fr = bg.frame(t)
             if style == "lines":
                 waves(fr, t)
-            logo.draw(fr, t)
+            if logo:
+                logo.draw(fr, t)
             for e in els:
                 e.draw(fr, t)
             if style == "glass":
@@ -429,6 +492,8 @@ def main():
                         if db > 3.5:
                             e.glint(fr, t, db + 0.06 * j)
                 sparkles.draw(fr, t)
+            if a.poster and i == int(DUR * FPS) - 1:
+                fr.convert("RGB").save(a.poster)
             proc.stdin.write(fr.convert("RGB").tobytes())
         proc.stdin.close()
         if proc.wait():
