@@ -395,6 +395,47 @@ def build(style, date, slots, slogan, pal, phrase=None):
     return els, pills
 
 
+class PastelSlot(El):
+    """Компактная плашка: короткое появление и один поворот стрелки, затем покой."""
+    def __init__(self, text, cx, cy, start, height):
+        w, h = 404, height
+        img = Image.new("RGBA", (w + 16, h + 16))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle((8, 11, w + 8, h + 11), radius=h / 2,
+                            fill=(120, 64, 80, 22))
+        d.rounded_rectangle((8, 8, w + 8, h + 8), radius=h / 2,
+                            fill=(255, 247, 247, 238), outline=(224, 180, 189, 255), width=2)
+        f = font(min(47, int(h * .49)))
+        # Альтернативное время остаётся в одной плашке.
+        while textlen(text, f) > w - 86 and f.size > 16:
+            f = font(f.size - 1)
+        ts = text_sprite(text, f, (100, 59, 67), (0, 0, 0, 0), pad=2)
+        img.alpha_composite(ts, (int(8 + 65 + (w - 81 - ts.width) / 2),
+                                int(8 + (h - ts.height) / 2)))
+        self.clock_x, self.clock_y = 43, 8 + h / 2
+        self.radius = min(17, h * .22)
+        super().__init__(img, cx, cy, start)
+
+    def draw(self, fr, t):
+        elapsed = t - self.start
+        if elapsed <= 0:
+            return
+        k = min(1, elapsed / .38)
+        a = ease(k)
+        img = self.img.copy()
+        d = ImageDraw.Draw(img)
+        x, y, r = self.clock_x, self.clock_y, self.radius
+        color = (153, 96, 111, 255)
+        d.ellipse((x-r, y-r, x+r, y+r), outline=color, width=2)
+        angle = -math.pi / 2 + (1 - ease(min(1, elapsed / .65))) * math.pi
+        d.line((x, y, x + math.cos(angle) * r * .67, y + math.sin(angle) * r * .67), fill=color, width=2)
+        d.line((x, y, x + r * .48, y + r * .16), fill=color, width=2)
+        if a < 1:
+            img.putalpha(img.getchannel("A").point(lambda v: int(v * a)))
+        fr.alpha_composite(img, (int(self.cx-img.width/2 - 18*(1-a)),
+                                int(self.cy-img.height/2 + 9*(1-a))))
+
+
 def build_pastel(date, slots, phrase=None):
     """Розовый пилот: свободная колонка слева, модель справа, точный текст поверх фото."""
     els = []
@@ -421,15 +462,10 @@ def build_pastel(date, slots, phrase=None):
     label(f"{date.day} {MONTHS[date.month - 1]}", 52, cx, 520, 1.0, width)
     label(DAYS[date.weekday()].upper(), 23, cx, 583, 1.15, width)
     label("СВОБОДНЫЕ ЧАСЫ", 23, cx, 678, 1.3, width, accent)
-    # Число строк учитывает альтернативы «или»; даже десять окон не заходят в подвал.
-    rows = [wrap(slot, font(44), width) for slot in slots]
-    units = sum(len(row) for row in rows)
-    step = min(115, 740 / max(1, units))
-    y = 770
-    for i, row in enumerate(rows):
-        for line in row:
-            label(line, min(54, int(step * 0.64)), cx, y, 1.6 + i * 0.16, width)
-            y += step
+    step = min(120, 740 / max(1, len(slots)))
+    height = min(92, int(step - 16))
+    for i, slot in enumerate(slots):
+        els.append(PastelSlot(slot, cx, 770 + i * step, 1.6 + i * .3, height))
 
     footer = Image.new("RGBA", (W, 235), (253, 242, 241, 242))
     els.append(El(footer, W / 2, H - footer.height / 2, 2.9))
@@ -467,7 +503,10 @@ def main():
         # надписи появляются в такт: момент появления притягивается к ближайшей доле или полудоле
         grid = sorted(set(BEATS + [(x + y) / 2 for x, y in zip(BEATS, BEATS[1:])]))
         for e in els:
-            e.start = snap(e.start, grid)
+            # Пастельные плашки идут с ровным интервалом; привязка к долям
+            # может схлопнуть соседние появления в один момент.
+            if style != "pastel":
+                e.start = snap(e.start, grid)
         logo = None if style == "pastel" else Logo(glint=style == "glass")
         sparkles = Sparkles(k) if style == "glass" else None
         downbeats = BEATS[4::4]
