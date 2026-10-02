@@ -1,0 +1,17 @@
+name: react-week
+on:
+  workflow_dispatch:
+jobs:
+  react:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python react_week.py
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL: ${{ vars.CHANNEL || '@gladkie_linii_msk' }}
+          REACTION: ${{ vars.REACTION || '🔥' }}
