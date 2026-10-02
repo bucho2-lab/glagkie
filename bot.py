@@ -5,7 +5,7 @@
   BOT_TOKEN      токен от @BotFather (секрет)
   ADMIN_CHAT_ID  id чата Ивана; только ему бот отвечает и присылает превью
   CHANNEL        канал для публикации, по умолчанию @gladkie_linii_msk
-  REACTION       эмодзи, которое бот ставит на свой пост в канале, по умолчанию 🔥
+  REACTIONS      реакции бота на посты канала по очереди, по умолчанию 🔥,❤,👍
 
 Режимы:
   python3 bot.py              один проход по новым сообщениям
@@ -28,7 +28,8 @@ MSK = ZoneInfo("Europe/Moscow")
 TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN = os.environ.get("ADMIN_CHAT_ID", "")
 CHANNEL = os.environ.get("CHANNEL", "@gladkie_linii_msk")
-REACTION = os.environ.get("REACTION", "🔥")  # реакция бота на каждый новый пост; пусто — не ставить
+# Реакции бота на посты канала, по очереди (карусель); пусто — не ставить.
+REACTIONS = [e.strip() for e in os.environ.get("REACTIONS", "🔥,❤,👍").split(",") if e.strip()]
 API = f"https://api.telegram.org/bot{TOKEN}/"
 
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -60,6 +61,17 @@ def api(method, files=None, **params):
 
 
 DATE_START = re.compile(r"^(\d{1,2}[./]\d{1,2}|сегодня|завтра|послезавтра)")
+
+
+def react(message_id):
+    """Поставить на пост канала реакцию; какая из карусели — зависит от номера поста,
+    поэтому повторный вызов ставит ту же самую."""
+    if not REACTIONS:
+        return None
+    emoji = REACTIONS[int(message_id) % len(REACTIONS)]
+    api("setMessageReaction", chat_id=CHANNEL, message_id=message_id,
+        reaction=json.dumps([{"type": "emoji", "emoji": emoji}]))
+    return emoji
 
 
 def parse_line(line, today):
@@ -277,12 +289,10 @@ def on_callback(q):
     action, mid = q["data"].split(":")
     if action == "pub":
         post = api("copyMessage", chat_id=CHANNEL, from_chat_id=chat, message_id=mid)
-        if REACTION:
-            try:  # если в канале выключены реакции, пост всё равно публикуется
-                api("setMessageReaction", chat_id=CHANNEL, message_id=post["message_id"],
-                    reaction=json.dumps([{"type": "emoji", "emoji": REACTION}]))
-            except Exception as e:
-                print("Реакция не поставлена:", e)
+        try:  # если в канале выключены реакции, пост всё равно публикуется
+            react(post["message_id"])
+        except Exception as e:
+            print("Реакция не поставлена:", e)
         api("editMessageReplyMarkup", chat_id=chat, message_id=mid,
             reply_markup='{"inline_keyboard":[[{"text":"✅ Опубликовано","callback_data":"noop:0"}]]}')
         api("answerCallbackQuery", callback_query_id=q["id"], text="Опубликовано в канале")

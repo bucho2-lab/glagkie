@@ -1,5 +1,7 @@
-name: react-week
+name: reactions
 on:
+  schedule:
+    - cron: "0 */2 * * *"  # каждые два часа
   workflow_dispatch:
 jobs:
   react:
@@ -10,8 +12,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests
-      - run: python react_week.py
+      - run: python react_posts.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL: ${{ vars.CHANNEL || '@gladkie_linii_msk' }}
-          REACTION: ${{ vars.REACTION || '🔥' }}
+          REACTIONS: ${{ vars.REACTIONS || '🔥,❤,👍' }}

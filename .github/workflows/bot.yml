@@ -26,5 +26,5 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
           CHANNEL: ${{ vars.CHANNEL || '@gladkie_linii_msk' }}
-          REACTION: ${{ vars.REACTION || '🔥' }}
+          REACTIONS: ${{ vars.REACTIONS || '🔥,❤,👍' }}
           GIT_PUSH: "1"
