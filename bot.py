@@ -5,6 +5,7 @@
   BOT_TOKEN      токен от @BotFather (секрет)
   ADMIN_CHAT_ID  id чата Ивана; только ему бот отвечает и присылает превью
   CHANNEL        канал для публикации, по умолчанию @gladkie_linii_msk
+  REACTION       эмодзи, которое бот ставит на свой пост в канале, по умолчанию 🔥
 
 Режимы:
   python3 bot.py              один проход по новым сообщениям
@@ -18,7 +19,7 @@
 Состояние не хранится: Telegram сам помнит, какие сообщения уже обработаны (offset),
 а кнопка «Опубликовать» копирует в канал уже присланное превью.
 """
-import datetime as dt, os, re, subprocess, sys, tempfile, time, glob
+import datetime as dt, json, os, re, subprocess, sys, tempfile, time, glob
 from zoneinfo import ZoneInfo
 import requests
 
@@ -27,6 +28,7 @@ MSK = ZoneInfo("Europe/Moscow")
 TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN = os.environ.get("ADMIN_CHAT_ID", "")
 CHANNEL = os.environ.get("CHANNEL", "@gladkie_linii_msk")
+REACTION = os.environ.get("REACTION", "🔥")  # реакция бота на каждый новый пост; пусто — не ставить
 API = f"https://api.telegram.org/bot{TOKEN}/"
 
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -274,7 +276,13 @@ def on_callback(q):
         return api("answerCallbackQuery", callback_query_id=q["id"])
     action, mid = q["data"].split(":")
     if action == "pub":
-        api("copyMessage", chat_id=CHANNEL, from_chat_id=chat, message_id=mid)
+        post = api("copyMessage", chat_id=CHANNEL, from_chat_id=chat, message_id=mid)
+        if REACTION:
+            try:  # если в канале выключены реакции, пост всё равно публикуется
+                api("setMessageReaction", chat_id=CHANNEL, message_id=post["message_id"],
+                    reaction=json.dumps([{"type": "emoji", "emoji": REACTION}]))
+            except Exception as e:
+                print("Реакция не поставлена:", e)
         api("editMessageReplyMarkup", chat_id=chat, message_id=mid,
             reply_markup='{"inline_keyboard":[[{"text":"✅ Опубликовано","callback_data":"noop:0"}]]}')
         api("answerCallbackQuery", callback_query_id=q["id"], text="Опубликовано в канале")
