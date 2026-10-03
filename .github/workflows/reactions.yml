@@ -16,4 +16,5 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL: ${{ vars.CHANNEL || '@gladkie_linii_msk' }}
+          REACT_CHANNELS: ${{ vars.REACT_CHANNELS || '@gladkie_linii_msk,@thaiworldspa,@crownthaispakozhuhovo' }}
           REACTIONS: ${{ vars.REACTIONS || '🔥,❤,👍' }}

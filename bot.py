@@ -63,13 +63,13 @@ def api(method, files=None, **params):
 DATE_START = re.compile(r"^(\d{1,2}[./]\d{1,2}|сегодня|завтра|послезавтра)")
 
 
-def react(message_id):
+def react(message_id, chat=None):
     """Поставить на пост канала реакцию; какая из карусели — зависит от номера поста,
     поэтому повторный вызов ставит ту же самую."""
     if not REACTIONS:
         return None
     emoji = REACTIONS[int(message_id) % len(REACTIONS)]
-    api("setMessageReaction", chat_id=CHANNEL, message_id=message_id,
+    api("setMessageReaction", chat_id=chat or CHANNEL, message_id=message_id,
         reaction=json.dumps([{"type": "emoji", "emoji": emoji}]))
     return emoji
 
